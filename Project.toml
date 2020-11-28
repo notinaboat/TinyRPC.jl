@@ -1,0 +1,7 @@
+name = "TinyRPC"
+uuid = "2ad8366c-e9d8-4b76-b1aa-fbf3c09cc392"
+authors = ["notinaboat <notinaboat@icloud.com>"]
+version = "0.1.0"
+
+[deps]
+Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
