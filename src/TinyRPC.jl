@@ -1,5 +1,7 @@
 module TinyRPC
 
+export @remote
+
 using Sockets
 using Serialization
 
