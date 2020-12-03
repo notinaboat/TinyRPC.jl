@@ -152,7 +152,7 @@ function tinyrpc_eval(io, expr, condition)
     catch err
         b = IOBuffer()
         showerror(b, err, catch_backtrace())
-        ErrorException("TinyRPC eval " * String(take!(b)))
+        ErrorException("TinyRPC eval error: " * String(take!(b)))
     end
     b = IOBuffer()
     serialize(b, condition)
@@ -236,9 +236,9 @@ julia> @remote io println("Hello")
 ```
 """
 function connect(host; port=2020, mod=Main)
-    io = Sockets.connect(host, port)
+    io = TinyRPCSocket(Sockets.connect(host, port), mod)
     @async tinyrpc_rx_loop(io)
-    TinyRPCSocket(io, mod)
+    io
 end
 
 
