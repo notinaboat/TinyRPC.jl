@@ -13,23 +13,29 @@ pkg> add https://github.com/notinaboat/TinyRPC.jl
 Server:
 
 ```julia
-julia> using TinyRPC
+julia> using TinyRPC: remote
 
 julia> server, clients = TinyRPC.listen(port=2020)
+
+julia> while isempty(clients) sleep(1) end
+
+julia> remote(clients[1], println)("Hello")
 ```
 
 Client:
 
 ```julia
-julia> using TinyRPC
+julia> using TinyRPC: remote
 
-julia> raspberry_pi = connect("192.168.0.173", 2020)
+julia> rpi = TinyRPC.connect("raspberrypi.local"; port=2020)
 
-julia> @remote pi read(`uname -a`, String)
+julia> TinyRPC.remote(rpi, read)(`uname -a`, String)
 "Linux raspberrypi 5.4.51+ #1333 Mon Aug 10 16:38:02 BST 2020 armv6l GNU/Linux
 "
 
-julia> @remote pi rand(UInt, 5)
+julia> rpi_rand = TinyRPC.remote(rpi, rand)
+
+julia> rpi_rand(UInt, 5)
 5-element Array{UInt64,1}:
  0x3d6555e980075ade
  0x28e453c8348db9dd
@@ -37,9 +43,51 @@ julia> @remote pi rand(UInt, 5)
  0x4ac67cf676b0188a
  0xb5fcb87edf5935bb
 
-julia> @remote pi write("/sys/class/gpio/gpio10/direction", "out")
+julia> rpi_write = TinyRPC.remote(rpi, write)
 
-julia> @remote pi write("/sys/class/gpio/gpio10/value", "1")
+julia> rpi_write("/sys/class/gpio/gpio10/direction", "out")
+
+julia> rpi_write("/sys/class/gpio/gpio10/value", "1")
+```
+
+## Execute a Julia expression on a remote node.
+
+```
+julia> x = 7
+
+julia> TinyRPC.remote_eval(rpi, :(1 + sum([$x,2])))
+10
+```
+
+## Opaque result pointers
+
+Get a pointer to a large array on the remote node. Use it to access a few elements.
+
+```julia
+julia> rp = TinyRPC.remote_eval_ptr(rpi, :([i for i in 1:1_000_000]))
+TinyRPC.RemotePtr{Array{Float64,1}}(0x00000000a66fe370, 0xbe910fa8)
+
+julia> TinyRPC.remote_eval(rpi, :( ($rp[])[500:503]))
+4-element Array{Int64,1}:
+ 500
+ 501
+ 502
+ 503
+
+julia> rp[]
+ERROR: ArgumentError: RemotePtr not valid on this node.
+
+julia> TinyRPC.free(rpi, rp)
+```
+
+## Execute Julia code from a String.
+
+```
+julia> TinyRPC.remote_include(rpi, """
+    x = 7
+    x * 2
+""")
+14
 ```
 
 ## Protocol
