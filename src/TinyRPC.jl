@@ -266,7 +266,7 @@ Evaluate `expr` on remote TinyRPC node connected by `io`.
 function remote_eval(io, expr)
 
     b = IOBuffer()
-    serialize(b, expr)
+    serialize(b, #==FIXME==#striplines(expr))
 
     call_complete = Ref(Condition())
     serialize(b, RemotePtr(call_complete))
@@ -278,6 +278,10 @@ function remote_eval(io, expr)
     end
     result
 end
+# FIXME
+# Striplines is needed because LinNumberNode ueses Int instead of Int32:
+# https://github.com/JuliaLang/julia/blob/2e3364e02f1dc3777926590c5484e7342bc0285d/src/jltypes.c#L2061
+# https://github.com/JuliaLang/julia/commit/77fc71c604f3d28cb62ec6b8c7104e0a497f2106#diff-882927c6e612596e22406ae0d06adcee88a9ec05e8b61ad81b48942e2cb266e9R2191
 
 
 """
@@ -288,16 +292,14 @@ Wrap the result in an opaque `RemotePtr`.
 See: [`free`](@ref)
 """
 function remote_eval_ptr(io, expr)
-    remote_eval(io, striplines(:(begin
+    remote_eval(io, (:(begin
         r = Ref($expr)
         rp = TinyRPC.RemotePtr(r)
         _io.refs[rp] = r
         rp
     end)))
 end
-# FIXME
-# Striplines is needed because LinNumberNode ueses Int instead of Int32:
-# https://github.com/JuliaLang/julia/blob/2e3364e02f1dc3777926590c5484e7342bc0285d/src/jltypes.c#L2061
+
 
 """
     free(::RemotePtr)
@@ -305,7 +307,7 @@ end
 Release a RemotePtr returned by [`remote_eval_ptr`](@ref).
 """
 function free(io, rp)
-    remote_eval(io, striplines(:( delete!(_io.refs, $rp); nothing )))
+    remote_eval(io, :( delete!(_io.refs, $rp); nothing ))
 end
 
 
