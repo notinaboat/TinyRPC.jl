@@ -18,18 +18,18 @@ pkg> add https://github.com/notinaboat/TinyRPC.jl
 
 Server:
 ```julia
-julia> using TinyRPC: remote
+julia> using TinyRPC
 
 julia> server, clients = TinyRPC.listen(port=2020)
 
 julia> while isempty(clients) sleep(1) end
 
-julia> remote(clients[1], println)("Hello")
+julia> TinyRPC.remote(clients[1], println)("Hello")
 ```
 
 Client:
 ```julia
-julia> using TinyRPC: remote
+julia> using TinyRPC
 
 julia> rpi = TinyRPC.connect("raspberrypi.local"; port=2020)
 
