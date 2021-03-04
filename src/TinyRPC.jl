@@ -148,7 +148,13 @@ end
 
 function tinyrpc_eval(io, expr, condition)
     result = try
-        io.mod.eval(:(let _io=$io; $expr end))
+        if expr isa Tuple{Symbol,Tuple}
+            f, args = expr
+            getfield(io.mod, f)(args...)
+        else
+            @assert expr isa Expr
+            io.mod.eval(:(let _io=$io; $expr end))
+        end
     catch err
         b = IOBuffer()
         showerror(b, err, catch_backtrace())
@@ -166,11 +172,11 @@ function tinyrpc_rx_loop(io)
         while isopen(io)
             a = deserialize(io)
             b = deserialize(io)
-            if a isa Expr
-                @async tinyrpc_eval(io, a, b)
+            if a isa RemotePtr
+                call_complete = a[]
+                notify(call_complete, b)
             else
-                @assert a isa RemotePtr
-                notify(a[], b)
+                @async tinyrpc_eval(io, a, b)
             end
         end
     catch err
@@ -181,6 +187,29 @@ function tinyrpc_rx_loop(io)
         end
         close(io)
     end
+end
+
+waiting = Set{Ref}()
+
+function tinyrpc_tx(io, expr)
+
+    b = IOBuffer()
+    serialize(b, expr)
+
+    call_complete = Ref(Condition())
+    push!(waiting, call_complete)
+    result = try
+        serialize(b, RemotePtr(call_complete))
+        write(io, take!(b))
+        wait(call_complete[])
+    finally
+        delete!(waiting, call_complete)
+    end
+
+    if result isa Exception
+        throw(result)
+    end
+    result
 end
 
 
@@ -247,7 +276,7 @@ end
 
 Execute `f(args...)` on remote TinyRPC node connected by `io`.
 """
-remote_call(io, f, args...) = remote_eval(io, :($f($(args...))))
+remote_call(io, f, args...) = tinyrpc_tx(io, (f, args))
 
 
 """
@@ -263,22 +292,7 @@ remote_include(io, expr) = remote_eval(io, :(include_string(_io.mod,$expr)))
 
 Evaluate `expr` on remote TinyRPC node connected by `io`.
 """
-function remote_eval(io, expr)
-
-    b = IOBuffer()
-    serialize(b, #==FIXME==#striplines(expr))
-
-    call_complete = Ref(Condition())
-    serialize(b, RemotePtr(call_complete))
-    write(io, take!(b))
-
-    result = GC.@preserve call_complete wait(call_complete[])
-    if result isa Exception
-        throw(result)
-    end
-    result
-end
-# FIXME
+remote_eval(io, expr::Expr) = tinyrpc_tx(io, striplines(expr)) # FIXME
 # Striplines is needed because LinNumberNode ueses Int instead of Int32:
 # https://github.com/JuliaLang/julia/blob/2e3364e02f1dc3777926590c5484e7342bc0285d/src/jltypes.c#L2061
 # https://github.com/JuliaLang/julia/commit/77fc71c604f3d28cb62ec6b8c7104e0a497f2106#diff-882927c6e612596e22406ae0d06adcee88a9ec05e8b61ad81b48942e2cb266e9R2191
@@ -330,6 +344,20 @@ macro remote(io, expr)
     f = QuoteNode(expr.args[1])
     args = expr.args[2:end]
     :(remote_call($(esc(io)), $f, $(args...)))
+end
+
+
+function remote_names(io, mod)
+    filter(x->x != mod, remote_eval(io, Expr(:call, :names, mod)))
+end
+
+macro remote_using(io, mod)
+    esc(quote
+        for f in TinyRPC.remote_names($io, $mod)
+            call = :(TinyRPC.remote_call($$io, $(Meta.quot(f)), args...))
+            eval(:($f(args...) = $call))
+        end
+    end)
 end
 
 

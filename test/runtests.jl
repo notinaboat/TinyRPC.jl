@@ -9,6 +9,15 @@ function foo(x)
     x
 end
 
+function bar()
+    return "BAR"
+end
+
+echo(x) = x
+echo(args...) = args
+
+
+
 
 @testset "TinyRPC" begin
 
@@ -20,9 +29,16 @@ end
 
     r = TinyRPC.@remote io vcat([1, 2, 3], 4, 5, 6)
     @test r == [1, 2, 3, 4, 5, 6]
+
+    r = TinyRPC.remote_call(io, :vcat, [1, 2, 3], 4, 5, 6)
+    @test r == [1, 2, 3, 4, 5, 6]
+
     @show clients
     @show clients[1]
     r = TinyRPC.@remote clients[1] vcat([1, 2, 3], 4, 5, 6)
+    @test r == [1, 2, 3, 4, 5, 6]
+
+    r = TinyRPC.remote_call(clients[1], :vcat, [1, 2, 3], 4, 5, 6)
     @test r == [1, 2, 3, 4, 5, 6]
 
     global count
@@ -31,7 +47,48 @@ end
     @test r == 7
     @test count == 7
 
+    r = TinyRPC.remote_call(io, :foo, 7)
+    @test r == 7
+    @test count == 14
+
     r = TinyRPC.@remote clients[1] foo(2)
     @test r == 2
-    @test count == 9
+    @test count == 16
+
+    @test TinyRPC.remote_call(io, :bar) == "BAR"
+
+    @test TinyRPC.remote_call(io, :echo, 7) == 7
+
+    @test TinyRPC.remote_call(io, :echo, 1, 2, 3) == (1, 2, 3)
+
+    @test TinyRPC.remote_call(io, :echo, :FOO) == :FOO
+
+    @test TinyRPC.remote_call(io, :echo, "BAR") == "BAR"
+
+end
+
+
+module AMod
+
+    using TinyRPC
+    using Test
+
+    module TheMod
+        export mod_foo, mod_bar
+        mod_foo(x) = "foo $x"
+        mod_bar() = "bar"
+    end
+
+    port = 2001 + rand(UInt8)
+    server, clients = TinyRPC.listen(;port=port, mod=TheMod)
+    io = TinyRPC.connect("localhost"; port=port)
+
+    TinyRPC.@remote_using io :TheMod
+
+    @testset "TinyRPC remote_using" begin
+
+        @test mod_bar() == "bar"
+        @test mod_foo(8) == "foo 8"
+        @test mod_foo("bar") == "foo bar"
+    end
 end
