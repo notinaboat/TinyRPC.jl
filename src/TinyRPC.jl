@@ -189,6 +189,7 @@ function tinyrpc_eval(io, expr, condition)
         for c in io.waiting
             notify(c[], err; error=true)
         end
+        close(io)
         if err isa Base.IOError
             @warn err
         else
@@ -219,14 +220,20 @@ function tinyrpc_rx_loop(io)
             end
         else
             @error err
-            close(io)
         end
+        close(io)
     end
 end
 
 function tinyrpc_tx(io, expr)
 
-    @repeat 4 try
+    @repeat 8 try
+
+        if !isopen(io.io)
+            @info "Reconnecting $io"
+            io.io = Sockets.connect(io.host, io.port)
+            @async tinyrpc_rx_loop(io)
+        end
 
         b = IOBuffer()
         serialize(b, expr)
@@ -249,9 +256,6 @@ function tinyrpc_tx(io, expr)
     catch err
         @delay_retry if isclient(io) && err isa Base.IOError
             close(io.io)
-            @info "Reconnecting $io"
-            io.io = Sockets.connect(io.host, io.port)
-            @async tinyrpc_rx_loop(io)
         end
     end
 end
