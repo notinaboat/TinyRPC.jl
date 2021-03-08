@@ -16,6 +16,12 @@ end
 echo(x) = x
 echo(args...) = args
 
+function delay()
+    @info("delay start")
+    sleep(2)
+    @info("delay end")
+    7
+end
 
 
 
@@ -64,6 +70,21 @@ echo(args...) = args
     @test TinyRPC.remote_call(io, :echo, :FOO) == :FOO
 
     @test TinyRPC.remote_call(io, :echo, "BAR") == "BAR"
+
+    the_err = nothing
+    @async try
+        TinyRPC.remote_call(io, :delay)
+    catch err
+        @info "remote_call error", err
+        the_err = err
+    end
+    sleep(0.2)
+    close(io.io)
+    sleep(0.2)
+    @test the_err isa EOFError
+
+    @test TinyRPC.remote_call(io, :echo, "BAR") == "BAR"
+    @test TinyRPC.remote_call(io, :echo, 1, 2, 3) == (1, 2, 3)
 
 end
 

@@ -115,25 +115,43 @@ A notifies the the waiting task and passes it the result.
 module TinyRPC
 
 
-
 using Sockets
 using Serialization
+using Retry
+using ZeroConf
+
 
 include("RemotePtr.jl")
 include("macroutils.jl") # See "FIXME" below...
 
 
-struct TinyRPCSocket
+mutable struct TinyRPCSocket
     io::Sockets.TCPSocket
-    name::String
+    host::String
+    port::UInt16
     mod::Module
     refs::Dict{RemotePtr,Ref}
-    parent::Vector{TinyRPCSocket}
-    function TinyRPCSocket(io, mod, parent=[])
-        name = getnameinfo(getpeername(io)[1])
-        new(io, name, mod, Dict{RemotePtr,Ref}(), parent)
+    waiting::Set{Ref{Condition}}
+    parent::Union{Nothing,Vector{TinyRPCSocket}}
+    function TinyRPCSocket(io::IO, mod, parent)
+        host, port = getpeername(io)
+        new(io,
+            getnameinfo(host), port,
+            mod,
+            Dict{RemotePtr,Ref}(),
+            Set{Ref{Condition}}(),
+            parent)
     end
+    TinyRPCSocket(host, port, mod) =
+        TinyRPCSocket(Sockets.connect(host, port), mod, nothing)
 end
+
+isclient(io::TinyRPCSocket) = io.parent == nothing
+
+struct TinyRPCError
+    msg::String
+end
+
 
 Base.isopen(io::TinyRPCSocket) = isopen(io.io)
 Base.write(io::TinyRPCSocket, x) = write(io.io, x)
@@ -144,7 +162,9 @@ function Base.close(io::TinyRPCSocket)
     filter!(x->x!=io, io.parent)
     close(io.io)
 end
-
+Base.show(io::IO, s::TinyRPCSocket) =
+    print(io, "TinyRPCSocket(", s.host, ",", s.port, ",", s.mod, ") ",
+              length(s.waiting), " waiting.")
 
 function tinyrpc_eval(io, expr, condition)
     result = try
@@ -158,12 +178,24 @@ function tinyrpc_eval(io, expr, condition)
     catch err
         b = IOBuffer()
         showerror(b, err, catch_backtrace())
-        ErrorException("TinyRPC eval error: " * String(take!(b)))
+        TinyRPCError("TinyRPC eval error: " * String(take!(b)))
     end
-    b = IOBuffer()
-    serialize(b, condition)
-    serialize(b, result)
-    write(io, take!(b))
+    try
+        b = IOBuffer()
+        serialize(b, condition)
+        serialize(b, result)
+        write(io, take!(b))
+    catch err
+        for c in io.waiting
+            notify(c[], err; error=true)
+        end
+        if err isa Base.IOError
+            @warn err
+        else
+            @error err
+        end
+    end
+    nothing
 end
 
 
@@ -181,40 +213,52 @@ function tinyrpc_rx_loop(io)
         end
     catch err
         if err isa EOFError
-            println("TinyRPC Disconnected: ", io.name)
+            @warn "Disconnected: $io"
+            for c in io.waiting
+                notify(c[], err; error=true)
+            end
         else
-            showerror(stdout, err, catch_backtrace())
+            @error err
+            close(io)
         end
-        close(io)
     end
 end
 
-waiting = Set{Ref}()
-
 function tinyrpc_tx(io, expr)
 
-    b = IOBuffer()
-    serialize(b, expr)
+    @repeat 4 try
 
-    call_complete = Ref(Condition())
-    push!(waiting, call_complete)
-    result = try
-        serialize(b, RemotePtr(call_complete))
-        write(io, take!(b))
-        wait(call_complete[])
-    finally
-        delete!(waiting, call_complete)
-    end
+        b = IOBuffer()
+        serialize(b, expr)
 
-    if result isa Exception
-        throw(result)
+        call_complete = Ref(Condition())
+        push!(io.waiting, call_complete)
+        result = try
+            serialize(b, RemotePtr(call_complete))
+            write(io, take!(b))
+            wait(call_complete[])
+        finally
+            delete!(io.waiting, call_complete)
+        end
+
+        if result isa TinyRPCError
+            throw(ErrorException(result.msg))
+        end
+        return result
+
+    catch err
+        @delay_retry if isclient(io) && err isa Base.IOError
+            close(io.io)
+            @info "Reconnecting $io"
+            io.io = Sockets.connect(io.host, io.port)
+            @async tinyrpc_rx_loop(io)
+        end
     end
-    result
 end
 
 
 """
-    TinyRPC.listen(; port=2020, mod=Main)
+    TinyRPC.listen(; port=2020, mod=Main, service_name=nothing)
 
 Start TinyRPC server on TCP port.
 
@@ -223,28 +267,38 @@ the listening TCPServer and a Vector of connected clients.
 
 If `mod=` is specified then remote calls from the client are evaluated in
 that local module.
+
+If `service_name` is specified a DNS-SD Service is registered.
 ```
 julia> server, clients = TinyRPC.listen()
 julia> while isempty(clients) sleep(1) end
 julia> @remote clients[1] println("Hello")
 ```
 """
-function listen(;port=2020, mod=Main)
+function listen(;port=2020, mod=Main, service_name=nothing)
 
-    server = Sockets.listen(IPv4(0), port)
+    if service_name == nothing
+        server = Sockets.listen(IPv4(0), port)
+    else
+        port, server = Sockets.listenany(IPv4(0), port)
+    end
     clients = TinyRPCSocket[]
 
     @async try
         while true
             tcp = accept(server)
             io = TinyRPCSocket(tcp, mod, clients)
-            println("TinyRPC Connected: ", io.name)
+            @info "Connected: $io"
             push!(clients, io)
             @async tinyrpc_rx_loop(io)
         end
     catch err
         showerror(stdout, err, catch_backtrace())
         close(server)
+    end
+
+    if service_name != nothing
+        register_dns_service(service_name, "_tinyrpc._tcp", port)
     end
 
     return (server, clients)
@@ -265,9 +319,27 @@ julia> @remote io println("Hello")
 ```
 """
 function connect(host; port=2020, mod=Main)
-    io = TinyRPCSocket(Sockets.connect(host, port), mod)
+    io = TinyRPCSocket(host, port, mod)
     @async tinyrpc_rx_loop(io)
     io
+end
+
+
+"""
+    TinyRPC.connect(host; port=2020, mod=Main)::TCPSocket
+
+Connect to TinyRPC server using DNS-SD `service_name`.
+"""
+function connect_service(service_name=nothing; mod=Main)
+    services = dns_service_browse("_tinyrpc._tcp")
+    while isopen(services)
+        name, (host, port) = take!(services)
+        if name == service_name
+            close(services)
+            return connect(host; port=port, mod=mod)
+        end
+    end
+    throw(ErrorExcpetion("DNS Service \"$service_name\" not found."))
 end
 
 

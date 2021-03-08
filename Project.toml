@@ -4,5 +4,7 @@ authors = ["notinaboat <notinaboat@icloud.com>"]
 version = "0.1.0"
 
 [deps]
+Retry = "20febd7b-183b-5ae2-ac4a-720e7ce64774"
 Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
 Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
+ZeroConf = "f6e371b4-83d5-4235-9652-fcef81372005"
