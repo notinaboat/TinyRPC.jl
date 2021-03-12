@@ -9,8 +9,8 @@ function foo(x)
     x
 end
 
-function bar()
-    return "BAR"
+function bar(; extra="")
+    return "BAR$extra"
 end
 
 echo(x) = x
@@ -86,6 +86,8 @@ end
     @test TinyRPC.remote_call(io, :echo, "BAR") == "BAR"
     @test TinyRPC.remote_call(io, :echo, 1, 2, 3) == (1, 2, 3)
 
+    @test TinyRPC.remote_call(io, :bar) == "BAR"
+    @test TinyRPC.remote_call(io, :bar; extra="_MORE") == "BAR_MORE"
 end
 
 

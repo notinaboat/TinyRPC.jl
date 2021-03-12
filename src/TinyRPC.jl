@@ -169,8 +169,8 @@ Base.show(io::IO, s::TinyRPCSocket) =
 function tinyrpc_eval(io, expr, condition)
     result = try
         if expr isa Tuple{Symbol,Tuple}
-            f, args = expr
-            getfield(io.mod, f)(args...)
+            f, (args, kw) = expr
+            getfield(io.mod, f)(args...; kw...)
         else
             @assert expr isa Expr
             io.mod.eval(:(let _io=$io; $expr end))
@@ -193,7 +193,8 @@ function tinyrpc_eval(io, expr, condition)
         if err isa Base.IOError
             @warn err
         else
-            @error err
+            exception=(err, catch_backtrace())
+            @error "Error sending TinyRPC message." exception
         end
     end
     nothing
@@ -219,7 +220,8 @@ function tinyrpc_rx_loop(io)
                 notify(c[], err; error=true)
             end
         else
-            @error err
+            exception=(err, catch_backtrace())
+            @error "Error reading TinyRPC message" exception
         end
         close(io)
     end
@@ -352,7 +354,7 @@ end
 
 Execute `f(args...)` on remote TinyRPC node connected by `io`.
 """
-remote_call(io, f, args...) = tinyrpc_tx(io, (f, args))
+remote_call(io, f, args...; kw...) = tinyrpc_tx(io, (f, (args, kw)))
 
 
 """
@@ -430,8 +432,9 @@ end
 macro remote_using(io, mod)
     esc(quote
         for f in TinyRPC.remote_names($io, $mod)
-            call = :(TinyRPC.remote_call($$io, $(Meta.quot(f)), args...))
-            eval(:($f(args...) = $call))
+            call = :(TinyRPC.remote_call($$io, $(Meta.quot(f)), args...; kw...))
+            @debug "remote_using: $f() => $($io)"
+            eval(:($f(args...; kw...) = $call))
         end
     end)
 end
