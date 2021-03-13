@@ -1,5 +1,8 @@
 # This file is machine-generated - editing it directly is not advised
 
+[[Logging]]
+uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
+
 [[Retry]]
 git-tree-sha1 = "41ac127cd281bb33e42aba46a9d3b25cd35fc6d5"
 uuid = "20febd7b-183b-5ae2-ac4a-720e7ce64774"

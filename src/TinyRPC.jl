@@ -122,6 +122,7 @@ using ZeroConf
 
 
 include("RemotePtr.jl")
+include("ChannelLogger.jl")
 include("macroutils.jl") # See "FIXME" below...
 
 
