@@ -132,7 +132,7 @@ mutable struct TinyRPCSocket
     port::UInt16
     mod::Module
     refs::Dict{RemotePtr,Ref}
-    waiting::Set{Ref{Condition}}
+    waiting::Dict{Ref{Condition}, Any}
     parent::Union{Nothing,Vector{TinyRPCSocket}}
     function TinyRPCSocket(io::IO, mod, parent)
         host, port = getpeername(io)
@@ -187,7 +187,7 @@ function tinyrpc_eval(io, expr, condition)
         serialize(b, result)
         write(io, take!(b))
     catch err
-        for c in io.waiting
+        for c in keys(io.waiting)
             notify(c[], err; error=true)
         end
         close(io)
@@ -217,12 +217,12 @@ function tinyrpc_rx_loop(io)
     catch err
         if err isa EOFError
             @warn "Disconnected: $io"
-            for c in io.waiting
+            for c in keys(io.waiting)
                 notify(c[], err; error=true)
             end
         else
             exception=(err, catch_backtrace())
-            @error "Error reading TinyRPC message" exception
+            @error "Error reading TinyRPC message" exception io.waiting
         end
         close(io)
     end
@@ -242,7 +242,7 @@ function tinyrpc_tx(io, expr)
         serialize(b, expr)
 
         call_complete = Ref(Condition())
-        push!(io.waiting, call_complete)
+        io.waiting[call_complete] = expr
         result = try
             serialize(b, RemotePtr(call_complete))
             write(io, take!(b))
