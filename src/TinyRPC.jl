@@ -128,30 +128,28 @@ include("macroutils.jl") # See "FIXME" below...
 
 mutable struct TinyRPCSocket
     io::Sockets.TCPSocket
+    service_name::String
     host::String
     port::UInt16
     mod::Module
     refs::Dict{RemotePtr,Ref}
     waiting::Dict{Ref{Condition}, Any}
     parent::Union{Nothing,Vector{TinyRPCSocket}}
-    function TinyRPCSocket(io::IO, mod, parent)
+    function TinyRPCSocket(io::IO, mod, parent; service_name="")
         host, port = getpeername(io)
         new(io,
+            service_name,
             getnameinfo(host), port,
             mod,
             Dict{RemotePtr,Ref}(),
-            Set{Ref{Condition}}(),
+            Dict{Ref{Condition},Any}(),
             parent)
     end
-    TinyRPCSocket(host, port, mod) =
-        TinyRPCSocket(Sockets.connect(host, port), mod, nothing)
+    TinyRPCSocket(host, port, mod; kw...) =
+        TinyRPCSocket(Sockets.connect(host, port), mod, nothing; kw...)
 end
 
 isclient(io::TinyRPCSocket) = io.parent == nothing
-
-struct TinyRPCError
-    msg::String
-end
 
 
 Base.isopen(io::TinyRPCSocket) = isopen(io.io)
@@ -160,7 +158,9 @@ Serialization.serialize(io::TinyRPCSocket, x) = serialize(io.io, x)
 Serialization.deserialize(io::TinyRPCSocket) = deserialize(io.io)
 function Base.close(io::TinyRPCSocket)
     empty!(io.refs)
-    filter!(x->x!=io, io.parent)
+    if io.parent != nothing
+        filter!(x->x!=io, io.parent)
+    end
     close(io.io)
 end
 Base.show(io::IO, s::TinyRPCSocket) =
@@ -171,17 +171,21 @@ function tinyrpc_eval(io, expr, condition)
     result = try
         if expr isa Tuple{Symbol,Tuple}
             f, (args, kw) = expr
+            @debug "tinyrpc_eval: $(io.mod).$f($args; $kw)"
             getfield(io.mod, f)(args...; kw...)
         else
             @assert expr isa Expr
+            @debug "tinyrpc_eval: $expr"
             io.mod.eval(:(let _io=$io; $expr end))
         end
     catch err
         b = IOBuffer()
         showerror(b, err, catch_backtrace())
-        TinyRPCError("TinyRPC eval error: " * String(take!(b)))
+        ErrorException("TinyRPC eval error: " * String(take!(b)))
     end
     try
+        @debug "tinyrpc_eval: result = $result"
+        check_serializable(result)
         b = IOBuffer()
         serialize(b, condition)
         serialize(b, result)
@@ -195,12 +199,34 @@ function tinyrpc_eval(io, expr, condition)
             @warn err
         else
             exception=(err, catch_backtrace())
-            @error "Error sending TinyRPC message." exception
+            @error "Error sending TinyRPC message." exception result
         end
     end
     nothing
 end
 
+
+is_serializable(x) = true
+
+"Size of SubString.offset::Int is platform dependant."
+is_serializable(::SubString) = false
+
+is_leaf(::AbstractString) = true
+is_leaf(::Ptr) = true
+is_leaf(x) = !hasmethod(iterate, (typeof(x),)) ||
+             iterate(x) == (x, nothing)
+walk(x) = is_leaf(x) ? (x,) : Iterators.flatten(walk(i) for i in x)
+
+function check_serializable(v)
+    for x in walk(v)
+        if !is_serializable(x)
+            msg = "$(typeof(x)) is not safely serializable.\n" *
+                   string(@doc is_serializable(::SubString))
+            @error msg x v
+            throw(ErrorException(msg))
+        end
+    end
+end
 
 function tinyrpc_rx_loop(io)
     try
@@ -222,7 +248,8 @@ function tinyrpc_rx_loop(io)
             end
         else
             exception=(err, catch_backtrace())
-            @error "Error reading TinyRPC message" exception io.waiting
+            waiting = values(io.waiting)
+            @error "Error reading TinyRPC message" waiting exception
         end
         close(io)
     end
@@ -233,11 +260,11 @@ function tinyrpc_tx(io, expr)
     @repeat 8 try
 
         if !isopen(io.io)
-            @info "Reconnecting $io"
-            io.io = Sockets.connect(io.host, io.port)
-            @async tinyrpc_rx_loop(io)
+            reconnect!(io)
         end
 
+        @debug "tinyrpc_tx: $expr"
+        check_serializable(expr)
         b = IOBuffer()
         serialize(b, expr)
 
@@ -251,13 +278,13 @@ function tinyrpc_tx(io, expr)
             delete!(io.waiting, call_complete)
         end
 
-        if result isa TinyRPCError
-            throw(ErrorException(result.msg))
+        if result isa ErrorException && startswith(result.msg, "TinyRPC")
+            throw(result)
         end
         return result
 
     catch err
-        @delay_retry if isclient(io) && err isa Base.IOError
+        @delay_retry if isclient(io) && typeof(err) in (Base.IOError, EOFError)
             close(io.io)
         end
     end
@@ -325,10 +352,10 @@ julia> io = TinyRPC.connect("localhost")
 julia> @remote io println("Hello")
 ```
 """
-function connect(host; port=2020, mod=Main)
-    io = TinyRPCSocket(host, port, mod)
+function connect(host; port=2020, mod=Main, kw...)
+    io = TinyRPCSocket(host, port, mod; kw...)
     @async tinyrpc_rx_loop(io)
-    io
+    return io
 end
 
 
@@ -339,14 +366,36 @@ Connect to TinyRPC server using DNS-SD `service_name`.
 """
 function connect_service(service_name=nothing; mod=Main)
     services = dns_service_browse("_tinyrpc._tcp")
+    addr, port = lookup_service(service_name)
+    rpc = connect(addr; port, mod, service_name)
+    rpc.host *= "/" * service_name
+    return rpc
+end
+
+function lookup_service(service_name)
+    services = dns_service_browse("_tinyrpc._tcp")
     while isopen(services)
         name, (host, port) = take!(services)
         if name == service_name
             close(services)
-            return connect(host; port=port, mod=mod)
+            addr = getaddrinfo(host, IPv4)
+            return addr, port
         end
     end
     throw(ErrorExcpetion("DNS Service \"$service_name\" not found."))
+end
+
+function reconnect!(io)
+    @info "Reconnecting $io"
+    @assert isclient(io)
+    if io.service_name != ""
+        host, port = lookup_service(io.service_name)
+    else
+        host, port = io.host, io.port
+    end
+    io.io = Sockets.connect(host, port)
+    @async tinyrpc_rx_loop(io)
+    return io
 end
 
 
@@ -431,12 +480,16 @@ function remote_names(io, mod)
 end
 
 macro remote_using(io, mod)
+    l = gensym()
     esc(quote
+        $l = Symbol[]
         for f in TinyRPC.remote_names($io, $mod)
+            push!($l, f)
             call = :(TinyRPC.remote_call($$io, $(Meta.quot(f)), args...; kw...))
             @debug "remote_using: $f() => $($io)"
             eval(:($f(args...; kw...) = $call))
         end
+        $l
     end)
 end
 
