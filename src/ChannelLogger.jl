@@ -19,6 +19,8 @@ end
 Base.collect(l::ChannelLogger) = collect_channel(l.c)
 Base.take!(l::ChannelLogger) = take!(l.c)
 Base.isready(l::ChannelLogger) = isready(l.c)
+Base.isempty(l::ChannelLogger) = isempty(l.c)
+drain!(l::ChannelLogger) = while !isempty(l) ; take!(l) ; end
 
 Logging.shouldlog(::ChannelLogger, args...) = true
 Logging.min_enabled_level(::ChannelLogger) = Logging.Debug
