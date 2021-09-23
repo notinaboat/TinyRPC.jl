@@ -120,6 +120,22 @@ using Serialization
 using Retry
 using ZeroConf
 
+@static if VERSION > v"1.6"
+    using Preferences
+    const tinyrpc_verbose = @load_preference("verbose", "false") == "true"
+else 
+    const tinyrpc_verbose = get(ENV, "TINY_RPC_VERBOSE", "false") == "true"
+end
+
+@static if tinyrpc_verbose
+    macro verbose(args...)
+        esc(:(@debug $(args...)))
+    end
+else
+    macro verbose(args...)
+        :(nothing)
+    end
+end
 
 include("RemotePtr.jl")
 include("ChannelLogger.jl")
@@ -171,11 +187,11 @@ function tinyrpc_eval(io, expr, condition)
     result = try
         if expr isa Tuple{Symbol,Tuple}
             f, (args, kw) = expr
-            @debug "tinyrpc_eval: $(io.mod).$f($args; $kw)"
+            @verbose "tinyrpc_eval: $(io.mod).$f($args; $kw)"
             getfield(io.mod, f)(args...; kw...)
         else
             @assert expr isa Expr
-            @debug "tinyrpc_eval: $expr"
+            @verbose "tinyrpc_eval: $expr"
             io.mod.eval(:(let _io=$io; $expr end))
         end
     catch err
@@ -184,7 +200,7 @@ function tinyrpc_eval(io, expr, condition)
         ErrorException("TinyRPC eval error: " * String(take!(b)))
     end
     try
-        @debug "tinyrpc_eval: result = $result"
+        @verbose "tinyrpc_eval: result = $result"
         check_serializable(result)
         b = IOBuffer()
         serialize(b, condition)
@@ -263,7 +279,7 @@ function tinyrpc_tx(io, expr)
             reconnect!(io)
         end
 
-        @debug "tinyrpc_tx: $expr"
+        @verbose "tinyrpc_tx: $expr"
         check_serializable(expr)
         b = IOBuffer()
         serialize(b, expr)
