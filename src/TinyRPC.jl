@@ -122,6 +122,8 @@ using ZeroConf
 
 @static if VERSION > v"1.6"
     using Preferences
+end
+@static if VERSION > v"1.6"
     const tinyrpc_verbose = @load_preference("verbose", "false") == "true"
 else 
     const tinyrpc_verbose = get(ENV, "TINY_RPC_VERBOSE", "false") == "true"
