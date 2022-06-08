@@ -1,7 +1,7 @@
 name = "TinyRPC"
 uuid = "2ad8366c-e9d8-4b76-b1aa-fbf3c09cc392"
 authors = ["notinaboat <notinaboat@icloud.com>"]
-version = "0.1.7"
+version = "0.1.8"
 
 [deps]
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"

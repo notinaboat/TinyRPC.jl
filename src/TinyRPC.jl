@@ -199,7 +199,9 @@ function tinyrpc_eval(io, expr, condition)
     catch err
         b = IOBuffer()
         showerror(b, err, catch_backtrace())
-        ErrorException("TinyRPC eval error: " * String(take!(b)))
+        err = ErrorException("TinyRPC eval error: " * String(take!(b)))
+        @warn "err" err
+        err
     end
     try
         @verbose "tinyrpc_eval: result = $result"
@@ -371,6 +373,7 @@ julia> @remote io println("Hello")
 ```
 """
 function connect(host; port=2020, mod=Main, kw...)
+    @info "Connecting to $host:$port..."
     io = TinyRPCSocket(host, port, mod; kw...)
     @async tinyrpc_rx_loop(io)
     return io
@@ -383,7 +386,7 @@ end
 Connect to TinyRPC server using DNS-SD `service_name`.
 """
 function connect_service(service_name=nothing; mod=Main)
-    services = dns_service_browse("_tinyrpc._tcp")
+    services = dns_service_browse("_tinyrpc._tcp") # FIXME not used ???
     addr, port = lookup_service(service_name)
     rpc = connect(addr; port, mod, service_name)
     rpc.host *= "/" * service_name
