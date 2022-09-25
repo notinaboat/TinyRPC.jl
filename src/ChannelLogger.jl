@@ -50,12 +50,11 @@ function Logging.handle_message(l::ChannelLogger,
 
     # Add a timestamp.
     if l.timestamp && timestamp == nothing
-        timestamp == time()
+        timestamp = time()
     end
     if timestamp != nothing
         push!(kwv, :timestamp => timestamp)
     end
-
 
     # Convert args to basic types.
     put!(l.c, ((LogLevel(level),
