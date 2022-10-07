@@ -39,5 +39,7 @@ function Base.getindex(rp::RemotePtr{T}) where T
         throw(ArgumentError("RemotePtr not valid on this node."))
     p = convert(Ptr{Ref{T}}, convert(UIntPtr, rp.p))
     ref = unsafe_pointer_to_objref(p)
+    ref isa Ref{T} ||
+        throw(ArgumentError("RemotePtr type error: $(typeof(ref)) != Ref{$T}"))
     ref[]
 end

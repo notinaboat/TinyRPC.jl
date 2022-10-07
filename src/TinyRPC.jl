@@ -216,6 +216,7 @@ function tinyrpc_eval(io, expr, condition)
         end
         close(io)
         if err isa Base.IOError
+            @warn "isopen(io.io): $(isopen(io.io))"
             @warn err
         else
             exception=(err, catch_backtrace())
@@ -252,24 +253,29 @@ function tinyrpc_rx_loop(io)
     try
         while isopen(io)
             a = deserialize(io)
-            b = deserialize(io)
-            if a isa RemotePtr
+            if a isa RemotePtr{Condition}
                 call_complete = a[]
+                b = try
+                    deserialize(io)
+                catch err
+                   ErrorException("TinyRPC deserialize error: $err");
+                end
                 notify(call_complete, b)
             else
+                b = deserialize(io)
                 @async tinyrpc_eval(io, a, b)
             end
         end
     catch err
         if err isa EOFError
             @warn "Disconnected: $io"
-            for c in keys(io.waiting)
-                notify(c[], err; error=true)
-            end
         else
             exception=(err, catch_backtrace())
             waiting = values(io.waiting)
             @error "Error reading TinyRPC message" waiting exception
+        end
+        for c in keys(io.waiting)
+            notify(c[], err; error=true)
         end
         close(io)
     end
@@ -386,7 +392,6 @@ end
 Connect to TinyRPC server using DNS-SD `service_name`.
 """
 function connect_service(service_name=nothing; mod=Main)
-    services = dns_service_browse("_tinyrpc._tcp") # FIXME not used ???
     addr, port = lookup_service(service_name)
     rpc = connect(addr; port, mod, service_name)
     rpc.host *= "/" * service_name
@@ -407,7 +412,7 @@ function lookup_service(service_name)
 end
 
 function reconnect!(io)
-    @info "Reconnecting $io"
+    @warn "Reconnecting $io"
     @assert isclient(io)
     if io.service_name != ""
         host, port = lookup_service(io.service_name)
@@ -415,6 +420,7 @@ function reconnect!(io)
         host, port = io.host, io.port
     end
     io.io = Sockets.connect(host, port)
+    @warn "Reconnected! $io"
     @async tinyrpc_rx_loop(io)
     return io
 end
